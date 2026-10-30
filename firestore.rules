@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function streamOwner(streamId) {
+      return signedIn() && get(/databases/$(database)/documents/streams/$(streamId)).data.creatorId == request.auth.uid;
+    }
+
+    match /profiles/{userId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['username', 'bio', 'avatarUrl', 'createdAt', 'updatedAt']);
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username', 'bio', 'avatarUrl', 'updatedAt']);
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /streams/{streamId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.creatorId == request.auth.uid
+        && request.resource.data.keys().hasOnly(['creatorId', 'creatorName', 'creatorAvatarUrl', 'title', 'description', 'category', 'thumbnailUrl', 'isLive', 'viewerCount', 'createdAt']);
+      allow update: if signedIn()
+        && resource.data.creatorId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isLive', 'viewerCount', 'endedAt']);
+      allow delete: if signedIn() && resource.data.creatorId == request.auth.uid;
+
+      match /peers/{peerId} {
+        allow read: if streamOwner(streamId) || (signedIn() && resource.data.viewerUid == request.auth.uid);
+        allow create: if streamOwner(streamId) || (signedIn() && request.resource.data.viewerUid == request.auth.uid);
+        allow update: if (streamOwner(streamId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hostUid', 'offer', 'state']))
+          || (signedIn()
+            && resource.data.viewerUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewerUid', 'viewerName', 'answer', 'state']));
+        allow delete: if streamOwner(streamId) || (signedIn() && resource.data.viewerUid == request.auth.uid);
+
+        match /{candidateCollection}/{candidateId} {
+          allow read, create: if streamOwner(streamId)
+            || (signedIn() && get(/databases/$(database)/documents/streams/$(streamId)/peers/$(peerId)).data.viewerUid == request.auth.uid);
+          allow update, delete: if false;
+        }
+      }
+
+      match /viewers/{viewerId} {
+        allow read: if streamOwner(streamId) || (signedIn() && resource.data.uid == request.auth.uid);
+        allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+        allow update: if (streamOwner(streamId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state', 'lastSeen']))
+          || (signedIn()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeen']));
+        allow delete: if streamOwner(streamId) || (signedIn() && resource.data.uid == request.auth.uid);
+      }
+
+      match /messages/{messageId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500
+          && request.resource.data.username == get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data.username
+          && request.resource.data.keys().hasOnly(['uid', 'username', 'text', 'createdAt']);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
